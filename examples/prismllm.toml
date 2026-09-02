@@ -1,0 +1,38 @@
+[llm]
+provider = "openai-compatible"
+model = "gpt-5.6-sol"
+base_url = "https://sub2api.prismllm.cyou/v1"
+api_key_env = "PRISMLLM_API_KEY"
+temperature = 0.7
+max_completion_tokens = 2000
+reasoning_effort = "low"
+timeout_seconds = 180
+max_retries = 3
+
+[graph]
+similarity_threshold = 0.38
+max_entities_per_discipline = 40
+cluster_limit = 6
+use_wikipedia = false
+
+[retrieval]
+enabled = false
+provider = "arxiv"
+max_results = 5
+
+[evolution]
+selection_ratio = 0.5
+crossover_count = 2
+variation_count = 2
+max_population_per_discipline = 30
+fitness_decay = 0.92
+min_fitness = 0.15
+
+[run]
+rounds = 3
+team_size = 5
+ideas_per_round = 5
+problem_count = 3
+reviewer_count = 3
+random_seed = 42
+output_dir = "runs"
