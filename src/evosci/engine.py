@@ -125,6 +125,7 @@ class EvoSciEngine:
         cls,
         run_dir: str | Path,
         *,
+        backend: LLMBackend | None = None,
         progress: ProgressCallback | None = None,
     ) -> "EvoSciEngine":
         directory = Path(run_dir)
@@ -132,7 +133,7 @@ class EvoSciEngine:
         graph = KnowledgeGraph.from_dict(
             config.graph, json.loads((directory / "graph.json").read_text())
         )
-        return cls(config, graph=graph, progress=progress)
+        return cls(config, backend=backend, graph=graph, progress=progress)
 
     @staticmethod
     def load_state(run_dir: str | Path) -> RunState:
@@ -175,6 +176,7 @@ class EvoSciEngine:
 
     def _write_report(self, destination: Path, state: RunState) -> None:
         all_evaluated = [item for round_result in state.rounds for item in round_result.evaluated_ideas]
+        self.progress(f"Ranking {len(all_evaluated)} ideas in a 5-round tournament")
         ranking = TournamentRanker(self.backend).rank(
             [item.idea for item in all_evaluated], rounds=5
         )

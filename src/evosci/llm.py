@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import Any
 
 from .config import LLMConfig
@@ -28,8 +29,21 @@ class LLMBackend(ABC):
 
 
 class OpenAICompatibleBackend(LLMBackend):
+    # Observation seam for the web UI: retries happen inside generate_json, so a wrapping
+    # decorator cannot see them. Set on the class or the instance; never let it raise.
+    on_attempt: Callable[[dict[str, Any]], None] | None = None
+
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
+
+    def _report_attempt(self, **payload: Any) -> None:
+        hook = self.on_attempt
+        if hook is None:
+            return
+        try:
+            hook(payload)
+        except Exception:
+            pass
 
     def generate_json(
         self,
@@ -40,7 +54,7 @@ class OpenAICompatibleBackend(LLMBackend):
         schema: dict[str, Any],
         context: dict[str, Any],
     ) -> dict[str, Any]:
-        del task, context
+        del context
         payload = {
             "model": self.config.model,
             "temperature": self.config.temperature,
@@ -81,17 +95,25 @@ class OpenAICompatibleBackend(LLMBackend):
                     else:
                         body = json.loads(response.read().decode("utf-8"))
                         content = body["choices"][0]["message"]["content"]
-                return parse_json_object(content)
+                parsed = parse_json_object(content)
+                self._report_attempt(task=task, attempt=attempt + 1, ok=True, error=None)
+                return parsed
             except urllib.error.HTTPError as exc:
                 try:
                     details = exc.read().decode("utf-8", errors="replace")[:1000]
                 except OSError:
                     details = ""
                 last_error = RuntimeError(f"HTTP {exc.code}: {details or exc.reason}")
+                self._report_attempt(
+                    task=task, attempt=attempt + 1, ok=False, error=str(last_error)
+                )
                 if attempt + 1 < self.config.max_retries:
                     time.sleep(2**attempt)
             except (urllib.error.URLError, TimeoutError, KeyError, json.JSONDecodeError, ValueError) as exc:
                 last_error = exc
+                self._report_attempt(
+                    task=task, attempt=attempt + 1, ok=False, error=str(exc)
+                )
                 if attempt + 1 < self.config.max_retries:
                     time.sleep(2**attempt)
         raise RuntimeError(f"Model request failed after retries: {last_error}")
