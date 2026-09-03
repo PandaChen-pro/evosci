@@ -272,11 +272,18 @@ class HeuristicBackend(LLMBackend):
     def _task_refinement(
         self, context: dict[str, Any], rng: random.Random
     ) -> dict[str, Any]:
+        """Offline stand-in for refinement, mirroring the live prompt's length budget.
+
+        The refinement clause replaces any earlier one rather than stacking: appending it
+        every round made each idea monotonically longer, and ``_task_review`` scores partly
+        on word count, so rounds appeared to improve when only the text had grown.
+        """
         del rng
         idea = dict(context["idea"])
         suggestions = context.get("suggestions", [])
         if suggestions:
-            idea["experiment"] += " Refinement: " + " ".join(suggestions[:2])
+            base = str(idea["experiment"]).split(" Refinement: ")[0]
+            idea["experiment"] = base + " Refinement: " + " ".join(suggestions[:2])
         idea["risks"] = list(dict.fromkeys(idea.get("risks", []) + [
             "External validity may vary across datasets or domains."
         ]))

@@ -7,3 +7,5 @@ build/
 *.egg-info/
 runs/
 results/
+docs/
+.DS_Store

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import itertools
-from typing import Any
 
-from .knowledge import KnowledgeGraph, stable_id, text_similarity
+from .knowledge import KnowledgeGraph, selection_score, stable_id, text_similarity
 from .llm import LLMBackend
 from .models import (
+    EntityCluster,
     EvaluatedIdea,
     ResearchIdea,
     ResearchProblem,
@@ -97,20 +97,22 @@ class MentorAgent:
         count: int,
         round_index: int,
     ) -> list[ResearchProblem]:
-        candidates: list[tuple[str, list[str], float]] = []
+        candidates: list[tuple[str, EntityCluster, float]] = []
         for discipline in disciplines:
             clusters = self.graph.clusters(discipline, topic)
-            if not clusters:
-                continue
             for cluster in clusters[:2]:
-                names = [self.graph.entities[entity_id].name for entity_id in cluster.entity_ids]
-                candidates.append((discipline, names, cluster.score))
-        candidates.sort(key=lambda item: item[2], reverse=True)
+                candidates.append(
+                    (discipline, cluster, selection_score(cluster, round_index))
+                )
+        candidates.sort(key=lambda item: (-item[2], item[1].id))
 
         problems: list[ResearchProblem] = []
-        for discipline, cluster_names, _ in candidates:
+        for discipline, cluster, _ in candidates:
             if len(problems) >= count:
                 break
+            cluster_names = [
+                self.graph.entities[entity_id].name for entity_id in cluster.entity_ids
+            ]
             entity_names = cluster_names or [
                 entity.name for entity in self.graph.top_entities(discipline, topic, limit=4)
             ]
@@ -156,7 +158,9 @@ class MentorAgent:
                     description=str(item["description"]),
                     guidance=str(item["guidance"]),
                     entity_ids=entity_ids,
+                    cluster_id=cluster.id,
                 ))
+                cluster.times_selected += 1
                 if len(problems) >= count:
                     break
         return problems
@@ -246,9 +250,10 @@ class ResearchTeam:
             )
             notes.append({"scientist": profile.id, **response})
 
-        entity_ids = list(dict.fromkeys(
+        problem_entity_ids = list(dict.fromkeys(
             entity_id for problem in problems for entity_id in problem.entity_ids
         ))
+        entity_ids = list(problem_entity_ids)
         for problem in problems:
             entity_ids.extend(
                 entity.id
@@ -287,12 +292,9 @@ class ResearchTeam:
                 "idea_generation",
             )
             referenced_names = as_string_list(item.get("entities"))
-            referenced_ids = [
-                entity.id for name in referenced_names
-                if (entity := self.graph.find_by_name(name)) is not None
-            ]
+            referenced_ids = self._resolve_referenced(referenced_names, problems)
             if not referenced_ids:
-                referenced_ids = entity_ids[:2]
+                referenced_ids = problem_entity_ids[:2]
             draft = {
                 "title": str(item["title"]),
                 "hypothesis": str(item["hypothesis"]),
@@ -312,8 +314,13 @@ class ResearchTeam:
                 task="refinement",
                 system=(
                     "You are the prime researcher refining a seed idea after team discussion. "
-                    "Preserve the core hypothesis, but strengthen controls, measurements, "
-                    "ablations, uncertainty reporting, and failure criteria."
+                    "Revise in whichever direction the feedback warrants: add a control or "
+                    "measurement where one is genuinely missing, and cut or merge anything "
+                    "that does not change what the experiment would show. Adding detail is "
+                    "not itself an improvement — an unfalsifiable hypothesis buried in "
+                    "caveats is worse than a plain one. Preserve the core hypothesis unless "
+                    "the feedback contradicts it, in which case state the revised claim "
+                    "plainly. Keep each field about as long as the draft's."
                 ),
                 user=(
                     f"Draft: {draft}\nTeam recommendations: {team_suggestions}\n"
@@ -348,6 +355,25 @@ class ResearchTeam:
         if not ideas:
             raise ValueError("The model returned no research ideas")
         return ideas
+
+    def _resolve_referenced(
+        self, names: list[str], problems: list[ResearchProblem]
+    ) -> list[str]:
+        """Resolve entity names an idea cites, scoped to the disciplines it was posed in.
+
+        A bare name lookup can land in an unrelated discipline that happens to share the
+        term (``uncertainty`` and ``heterogeneity`` each appear in three seed sets), which
+        would route review credit to a cluster that had no part in the idea.
+        """
+        disciplines = list(dict.fromkeys(problem.discipline for problem in problems))
+        resolved = []
+        for name in names:
+            for discipline in disciplines:
+                entity = self.graph.find_by_name(name, discipline)
+                if entity:
+                    resolved.append(entity.id)
+                    break
+        return list(dict.fromkeys(resolved))
 
 
 class ReviewerPanel:

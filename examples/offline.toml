@@ -6,7 +6,12 @@ temperature = 0.7
 [graph]
 similarity_threshold = 0.38
 max_entities_per_discipline = 40
-cluster_limit = 6
+cluster_limit = 4
+min_cluster_size = 2
+containment_threshold = 0.90
+max_name_word_growth = 1
+fission_min_gain = 0.05
+cluster_max_stale = 6
 use_wikipedia = false
 
 [retrieval]
@@ -21,6 +26,8 @@ variation_count = 2
 max_population_per_discipline = 30
 fitness_decay = 0.92
 min_fitness = 0.15
+prune_ratio = 0.15
+prune_floor_ratio = 0.80
 
 [run]
 rounds = 3

@@ -9,6 +9,7 @@ from typing import Callable
 
 from .agents import MentorAgent, ResearchTeam, ReviewerPanel, TournamentRanker
 from .config import EvoSciConfig
+from .diagnostics import diagnose
 from .evolution import EntityEvolution
 from .knowledge import KnowledgeGraph
 from .llm import LLMBackend, build_backend
@@ -166,6 +167,11 @@ class EvoSciEngine:
             json.dumps(state.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
         )
         self.graph.save(destination / "graph.json")
+        report = diagnose(state, self.graph)
+        (destination / "diagnostics.json").write_text(
+            json.dumps(report.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (destination / "diagnostics.md").write_text(report.render(), encoding="utf-8")
 
     def _write_report(self, destination: Path, state: RunState) -> None:
         all_evaluated = [item for round_result in state.rounds for item in round_result.evaluated_ideas]

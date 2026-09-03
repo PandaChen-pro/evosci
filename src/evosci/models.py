@@ -26,10 +26,17 @@ class Entity:
 
 @dataclass(slots=True)
 class EntityCluster:
+    """A persistent semantic cluster: the paper's basic unit of evolution (§3.4)."""
+
     id: str
     discipline: str
     entity_ids: list[str]
     score: float = 0.0
+    label: str = ""
+    fitness: float = 0.5
+    times_selected: int = 0
+    stale: int = 0
+    generation: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -48,6 +55,7 @@ class ResearchProblem:
     description: str
     guidance: str
     entity_ids: list[str] = field(default_factory=list)
+    cluster_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
