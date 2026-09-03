@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .keys import name_error
+
 ARTIFACT_FILES = {
     "config.json": "application/json",
     "state.json": "application/json",
@@ -23,6 +25,26 @@ ARTIFACT_FILES = {
 
 IDEA_LIST_FIELDS = ("id", "title", "hypothesis", "round_index", "entity_ids", "authors")
 SCORE_FIELDS = ("novelty", "feasibility", "validity", "excitement", "overall", "confidence")
+
+REDACTED = "«已隐去»"
+
+
+def redact_config(config: Any) -> Any:
+    """Blank out an ``api_key_env`` holding a secret rather than a variable name.
+
+    Submissions are validated now, but run directories written before that validation
+    existed have the raw key in config.json — and this file is both returned by
+    ``GET /api/runs/{id}`` and downloadable from the artifacts tab.
+    """
+    if not isinstance(config, dict):
+        return config
+    llm = config.get("llm")
+    if not isinstance(llm, dict):
+        return config
+    value = llm.get("api_key_env")
+    if isinstance(value, str) and name_error(value):
+        return {**config, "llm": {**llm, "api_key_env": REDACTED}}
+    return config
 
 
 def load_json(run_dir: Path, name: str) -> Any | None:
@@ -52,7 +74,17 @@ def read_artifact(run_dir: Path, name: str) -> tuple[str, str] | None:
     path = run_dir / name
     if not path.exists():
         return None
-    return path.read_text(encoding="utf-8", errors="replace"), media
+    body = path.read_text(encoding="utf-8", errors="replace")
+    if name == "config.json":
+        # Same redaction as the detail endpoint: this tab is the other way the raw file
+        # reaches a browser, and an older run may still hold a pasted key.
+        try:
+            return json.dumps(
+                redact_config(json.loads(body)), ensure_ascii=False, indent=2
+            ), media
+        except json.JSONDecodeError:
+            return body, media
+    return body, media
 
 
 def _scores(review: dict[str, Any]) -> dict[str, Any]:

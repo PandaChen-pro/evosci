@@ -7,7 +7,6 @@ holder can and cannot do.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -27,12 +26,14 @@ from .artifacts import (
     graph_payload,
     load_json,
     read_artifact,
+    redact_config,
     summarize_state,
 )
 from .auth import require_token, resolve_token
 from .configspec import apply_overrides, default_config, field_spec
 from .events import read_events, stream_events
 from .jobs import JobStore
+from .keys import KeyStore
 from .ledger import build_ledger
 from .settings import WebSettings
 
@@ -46,11 +47,27 @@ class RunRequest(BaseModel):
     label: str | None = Field(default=None, max_length=120)
 
 
+class KeyRequest(BaseModel):
+    """The one endpoint that accepts a secret. It has no matching read path.
+
+    Bounds here are deliberately loose: a pydantic constraint failure echoes the rejected
+    input back in the 422 body, so a key mistyped into ``name`` would be quoted straight
+    into an error response. ``KeyStore.set`` enforces the real limits and reports the
+    reason without repeating the value.
+    """
+
+    name: str
+    value: str
+
+
 def create_app(settings: WebSettings | None = None) -> FastAPI:
     settings = settings or WebSettings.from_env()
     app = FastAPI(title="EvoSci Web", version="1.0")
     app.state.settings = settings
     app.state.token = resolve_token(settings)
+    # Built before the JobStore: loading it applies any saved key into os.environ, which is
+    # where both config.validate() and the spawn allowlist look.
+    app.state.keys = KeyStore()
     app.state.jobs = JobStore(settings)
 
     app.add_middleware(
@@ -64,6 +81,9 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
 
     def store(request: Request) -> JobStore:
         return request.app.state.jobs
+
+    def keys(request: Request) -> KeyStore:
+        return request.app.state.keys
 
     def run_dir_or_404(request: Request, job_id: str) -> Path:
         path = store(request).resolve_dir(job_id)
@@ -87,30 +107,73 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
         }
 
     @app.get("/api/env/check", dependencies=guard)
-    def env_check(names: str = Query(default="")) -> dict[str, bool]:
+    def env_check(request: Request, names: str = Query(default="")) -> dict[str, bool]:
         # Reports presence only. The value of an API key never leaves this process.
         wanted = [item.strip() for item in names.split(",") if item.strip()][:10]
-        return {name: bool(os.environ.get(name)) for name in wanted}
+        return {name: keys(request).has(name) for name in wanted}
+
+    # ---- api keys --------------------------------------------------------
+
+    @app.get("/api/keys", dependencies=guard)
+    def list_keys(request: Request) -> dict[str, Any]:
+        store_ = keys(request)
+        return {"names": store_.names(), "entries": [store_.describe(n) for n in store_.names()]}
+
+    @app.put("/api/keys", dependencies=guard)
+    def put_key(request: Request, body: KeyRequest) -> dict[str, Any]:
+        """Accepts a secret and returns only whether it is now present.
+
+        There is deliberately no GET for the value: the way this field leaked before was a
+        stored secret finding its way back out through a read path.
+        """
+        try:
+            keys(request).set(body.name.strip(), body.value)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return keys(request).describe(body.name.strip())
+
+    @app.delete("/api/keys/{name}", dependencies=guard)
+    def delete_key(request: Request, name: str) -> dict[str, Any]:
+        keys(request).delete(name)
+        return keys(request).describe(name)
 
     # ---- runs ------------------------------------------------------------
 
     @app.post("/api/runs", status_code=201, dependencies=guard)
     def create_run(request: Request, body: RunRequest) -> dict[str, Any]:
-        data, invalid = apply_overrides(body.overrides)
-        if invalid:
+        data, invalid, rejected = apply_overrides(body.overrides)
+        if invalid or rejected:
             raise HTTPException(
                 status_code=422,
-                detail={"message": "Unknown or forbidden config keys", "invalid_keys": invalid},
+                detail={
+                    "message": "配置项被拒绝",
+                    "invalid_keys": invalid,
+                    "rejected": rejected,
+                },
             )
         disciplines = [item.strip().lower() for item in body.disciplines if item.strip()]
         if not disciplines:
-            raise HTTPException(status_code=422, detail="At least one discipline is required")
+            raise HTTPException(status_code=422, detail="至少需要一个学科")
         try:
             config = EvoSciConfig.from_dict(data)
             if config.run.rounds > settings.max_rounds:
                 raise ValueError(
                     f"run.rounds exceeds the server limit of {settings.max_rounds}"
                 )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        # Ahead of config.validate(), which raises its own English "Missing API key" for the
+        # same condition — this one names the button that fixes it.
+        if config.llm.provider == "openai-compatible" and not keys(request).has(
+            config.llm.api_key_env
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"未找到 API key：{config.llm.api_key_env}。请先在下方「API 密钥」里保存它。",
+            )
+
+        try:
             config.validate()
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -139,7 +202,7 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
         return {
             "job": store(request).summary(path),
             "state": summarize_state(state) if state else None,
-            "config": load_json(path, "config.json"),
+            "config": redact_config(load_json(path, "config.json")),
             "artifacts": artifact_list(path),
         }
 

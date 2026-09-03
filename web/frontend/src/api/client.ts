@@ -61,6 +61,13 @@ export interface FieldSpec {
   type: string;
   optional: boolean;
   default: unknown;
+  choices?: string[];
+}
+
+export interface KeyEntry {
+  name: string;
+  present: boolean;
+  source: "ui" | "env" | null;
 }
 
 export interface Defaults {
@@ -127,6 +134,16 @@ export const api = {
   defaults: () => request<Defaults>("/config/defaults"),
   envCheck: (names: string[]) =>
     request<Record<string, boolean>>(`/env/check?names=${encodeURIComponent(names.join(","))}`),
+  listKeys: () => request<{ names: string[]; entries: KeyEntry[] }>("/keys"),
+  // The value goes up and never comes back: the response reports presence only.
+  putKey: (name: string, value: string) =>
+    request<KeyEntry>("/keys", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, value }),
+    }),
+  deleteKey: (name: string) =>
+    request<KeyEntry>(`/keys/${encodeURIComponent(name)}`, { method: "DELETE" }),
   createRun: (body: {
     topic: string;
     disciplines: string[];

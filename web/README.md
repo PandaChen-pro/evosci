@@ -82,10 +82,22 @@ is compared with `compare_digest` and travels only in a header — never a URL o
 it stays out of access logs and there is no CSRF surface. More than 10 failures per minute
 from one address gets a 429.
 
-The API key is never in a request body, never in a response, and never in a TOML file. It
-reaches a run only through the child process's environment, and a run is given only the one
-variable its own config names. `asdict(EvoSciConfig())` cannot leak it — `api_key` is a
-property, so only `api_key_env` serializes.
+The API key can be set two ways: exported into the service's environment before startup, or
+typed into the new-run page, which sends it to `PUT /api/keys` and applies it to the service
+process's environment. That endpoint is the only one that accepts a secret and it has no
+matching read path — `GET /api/keys` reports names and presence, never values. Keys set
+through the UI persist in `web/.keys.json` (mode 0600, gitignored) so a restart does not
+turn a configured run into a failing one.
+
+The key is never in a response and never in a TOML file. It reaches a run only through the
+child process's environment, and a run is given only the one variable its own config names.
+`asdict(EvoSciConfig())` cannot leak it — `api_key` is a property, so only `api_key_env`
+serializes.
+
+`api_key_env` holds a variable *name*. A secret pasted there is rejected on submit, and any
+run directory written before that check existed has the field redacted on both read paths
+(`GET /api/runs/{id}` and the `config.json` artifact). The stored file on disk is not
+rewritten — a key that reached one should be rotated, not just hidden.
 
 Artifact names are checked against a fixed whitelist and never path-joined with user input.
 

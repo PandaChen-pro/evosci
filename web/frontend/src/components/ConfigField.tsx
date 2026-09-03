@@ -30,6 +30,33 @@ export function ConfigField({
   }
 
   const numeric = spec.type === "int" || spec.type === "float";
+
+  if (spec.choices) {
+    return (
+      <div>
+        <label htmlFor={id}>{spec.name}</label>
+        <select
+          id={id}
+          style={{ width: "100%" }}
+          value={shown === null || shown === undefined ? "" : String(shown)}
+          onChange={(event) => {
+            const raw = event.target.value;
+            onChange(spec.path, raw === "" && spec.optional ? null : raw);
+          }}
+        >
+          {spec.choices.map((choice) => (
+            <option key={choice} value={choice}>
+              {choice === "" ? "（不设置）" : choice}
+            </option>
+          ))}
+        </select>
+        <div className="small muted">
+          默认 {spec.default === null || spec.default === "" ? "无" : String(spec.default)}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <label htmlFor={id}>{spec.name}</label>
